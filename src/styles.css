@@ -15,9 +15,18 @@ body,
   min-height: 100%;
 }
 
+html {
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
   background: #f5f5ff;
+  color: #242145;
+  font-family: Inter, "Segoe UI", Arial, sans-serif;
+  font-weight: 500;
 }
 
 button,

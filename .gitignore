@@ -9,5 +9,9 @@ Thumbs.db
 .idea/
 .vscode/
 coverage/
+test-results/
+playwright-report/
 tailwinds_bb/
 tailwinds_bb.zip
+.tools/
+supabase/.temp/

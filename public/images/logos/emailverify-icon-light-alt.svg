@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="emailverify light mode app icon">
+
+<defs>
+  <linearGradient id="purpleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+    <stop offset="0%" stop-color="#8B5CF6"/>
+    <stop offset="55%" stop-color="#6D4AFF"/>
+    <stop offset="100%" stop-color="#4F46E5"/>
+  </linearGradient>
+  <linearGradient id="handleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+    <stop offset="0%" stop-color="#F2ECFF"/>
+    <stop offset="100%" stop-color="#BDA7FF"/>
+  </linearGradient>
+</defs>
+
+<defs>
+  <radialGradient id="lightBg" cx="35%" cy="25%" r="90%">
+    <stop offset="0%" stop-color="#FFFFFF"/>
+    <stop offset="100%" stop-color="#F3F1FF"/>
+  </radialGradient>
+</defs>
+<rect x="32" y="32" width="960" height="960" rx="220" fill="url(#lightBg)"/>
+<g transform="translate(116 116) scale(5.5)">
+
+<g>
+  <path d="M111.5 102.5
+           A49 49 0 1 1 111.5 41.5
+           A49 49 0 0 1 114.5 98"
+        fill="none"
+        stroke="url(#purpleGrad)"
+        stroke-width="15"
+        stroke-linecap="round"/>
+  <path d="M48 71 L64 86 L91 56"
+        fill="none"
+        stroke="url(#purpleGrad)"
+        stroke-width="13"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+  <rect x="103" y="98" width="18" height="31" rx="9"
+        transform="rotate(-45 112 113.5)"
+        fill="url(#handleGrad)"/>
+</g>
+
+</g>
+</svg>

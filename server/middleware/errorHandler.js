@@ -1,6 +1,6 @@
 import { ZodError } from 'zod'
 
-export function errorHandler(error, _request, response, _next) {
+export function errorHandler(error, request, response, _next) {
   if (error instanceof ZodError) {
     return response.status(400).json({
       error: {
@@ -12,10 +12,13 @@ export function errorHandler(error, _request, response, _next) {
   }
 
   const status = Number.isInteger(error.status) ? error.status : 500
+  if (process.env.NODE_ENV !== 'production') {
+    console.error(`[${request.method} ${request.originalUrl}]`, error.stack || error.message)
+  }
   const body = {
     error: {
       code: error.code || 'internal_error',
-      message: status >= 500 ? 'The verification service is temporarily unavailable.' : error.message,
+      message: status >= 500 ? 'The service is temporarily unavailable.' : error.message,
     },
   }
 
@@ -25,4 +28,3 @@ export function errorHandler(error, _request, response, _next) {
 
   return response.status(status).json(body)
 }
-

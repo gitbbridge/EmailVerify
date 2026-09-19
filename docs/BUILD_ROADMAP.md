@@ -1,6 +1,102 @@
 # EmailVerify Build Roadmap
 
-This guide turns the current UX shell into a production-ready email verification SaaS while keeping the first release intentionally small.
+## Delivery rule
+
+### Server file import (September 19)
+
+Implemented: authenticated multipart `POST /api/v1/batches/upload`, CSV/TXT/XLSX parsing, normalization and duplicate removal, 10 MB file limit, 250,000 unique-address limit, private normalized submission storage through the existing batch workflow. One email per cell or TXT line is accepted; malformed email cells are counted and reported. No new database schema is required.
+
+Parsing runs in a worker with a 15-second timeout and 128 MB V8 heap limit. Each server process permits two active imports and one per workspace. These are process-local limits, not a distributed rate limiter; native/decompression memory requires deployment-level process limits.
+
+Verified: `npm run test:upload` covers actual XLSX, CSV quotes/BOM, TXT, duplicates, malformed/oversized inputs and unauthenticated HTTP denial. Browser upload tests verify multipart authorization, approval feedback and error recovery on desktop/mobile with API fixtures. Dependency audit reported zero known vulnerabilities.
+
+Unfinished: authenticated upload-to-storage integration tests, provider failure/retry tests, large provider archive ingestion, durable distributed import throttling, and repeat-submission idempotency. The full customer list lifecycle is not yet launch-ready. Earlier statements that call the complete workflow finished should be read with these limitations.
+
+Complete each feature through UI, API, database, permissions, and tests; clearly identify anything unfinished.
+
+This project is a deployable SaaS product and a portfolio demonstration of production engineering. A polished screen or successful build does not establish production readiness.
+
+## Production delivery plan (revised September 19, 2026)
+
+This section is the current source of truth. The original phases and historical status below remain useful implementation context, but their "complete in code" wording does not mean a feature has passed integration tests or is launch-ready.
+
+### Definition of done
+
+Each feature must have persisted behavior, server-side validation, tenant and role authorization, usable loading/error/empty states, and appropriate automated verification. Changes involving money, identity, or permissions require negative-path and retry/concurrency coverage. Database changes ship as migrations. UI controls must either perform their stated action or clearly communicate unavailability. Preview fixtures must remain distinct from authenticated customer data.
+
+Record evidence at three separate levels:
+
+- Implemented: code and schema exist; a build is only a compilation check.
+- Verified: named tests demonstrate the expected behavior, including relevant failure cases.
+- Launch-ready: verified behavior also works in the deployed environment with production configuration and operational ownership.
+
+### Current assessment
+
+| Area | Evidence today | Remaining work |
+| --- | --- | --- |
+| Marketing and visual design | Existing responsive UI, local Inter font assets, branded email rendering observed | Copy must match actual capabilities; accessibility and complete responsive coverage |
+| Authentication | Signup/login/confirmation plus a verified password recovery lifecycle; durable reset throttles | Confirm production redirect allowlist and delivery; add login/signup abuse controls and broader session-expiry coverage |
+| Profile | Authenticated name/workspace update endpoint and controlled form implemented | Atomic profile/workspace changes, refresh state synchronization, audit and permission tests |
+| Account and team | New migration, tenant-scoped endpoints, invite/acceptance UI, roles/removal and branded invite delivery code | See team verification evidence below; confirm real invite delivery and production auth redirect allowlist before launch |
+| Credits and inventory | Ledger, reserve/settle functions, prepaid inventory policy implemented | Concurrent reservations, reconciliation, retry/failure integration suite |
+| PAYG billing | Checkout, signed webhook handling and portal endpoints implemented | End-to-end Stripe test-mode purchase, webhook replay, refund and return-flow verification; UI must use real billing data |
+| Monthly billing | Catalog exists, checkout deliberately disabled | Renewal/expiration/cancellation fulfillment and inventory tests before enabling |
+| Verification and lists | Authenticated batch upload, persisted results, selected-batch detail, filters, search, pagination and exports implemented | Verify provider archive-to-result ingestion for large lists; add upload parsing coverage and provider failure/retry integration tests |
+| Security and preferences | Working password-reset action; disconnected 2FA and notification controls removed | Design and implement 2FA and persisted notification preferences as separate complete features |
+| Support and operations | Support endpoints, admin actions and retention worker implemented | Delivery failures/retries, audit review, scheduled-job reliability and recovery tests |
+| Deployment | Local development is available | Staging deployment, HTTPS, environment validation, database backups, monitoring and release checklist |
+
+### Next milestones, in order
+
+1. Finish account and team acceptance: invitations, permission matrix, revocation, audit, no duplicate signup grants, and real identity integration tests.
+2. Complete remaining authentication hardening: login/signup throttles, session-expiry behavior, production redirect allowlist and delivery checks. Password recovery itself is verified below.
+3. Complete the customer verification journey: upload a list, follow progress, open that exact list, filter its real results and export them. The core path is now implemented; remaining work is large-provider-archive coverage, upload parsing tests and failure/retry evidence.
+4. Prove the financial lifecycle in Stripe test mode and database integration tests. Reconcile grants and provider inventory. Enable monthly billing only after renewal and expiry tests pass.
+5. Harden deployment and operations: environment-specific secrets, request validation/rate limits, logs with request IDs, durable scheduled jobs, error monitoring, backups and restore exercise.
+6. Prepare the portfolio release: deployment URL, reproducible setup, architecture and tradeoffs document, CI checks, test evidence and a concise demo walkthrough.
+
+### Team implementation and evidence
+
+- Migration: `supabase/migrations/202609190001_workspace_team.sql`.
+- SQL transactions serialize team mutations per workspace and re-check actor roles. Invite tokens are random 256-bit values stored only as SHA-256 hashes; invitations expire after seven days.
+- Owners appoint administrators. Administrators invite/remove members; they cannot modify the owner, another administrator, or themselves. Removed or demoted administrators lose their created workspace API keys.
+- Invite acceptance requires a verified matching email and an explicit join action. It does not create a workspace or issue free credits. Existing workspace membership is not transferred.
+- Limits: ten invitations per workspace per hour and twenty active pending invitations. Revocation and membership changes are recorded in `team_events`.
+- `npm run test:team:db`: runs database authorization/lifecycle tests inside a transaction and rolls back all fixtures and test migration changes. Requires `DATABASE_URL`; does not send email.
+- `npm run test:browser`: runs desktop and mobile Edge tests with API fixtures. These verify UI behavior; they do not establish real provider delivery or end-to-end auth correctness.
+- `npm run db:team`: applies the additive team migration transactionally to the configured database and reloads the API schema. Normal deployments should use the migration with the existing Supabase migration process.
+
+### Password recovery implementation and evidence
+
+- Recovery callbacks preserve Supabase's event type and route to a dedicated new-password form. Invalid and expired links offer a fresh reset request without exposing password inputs.
+- New passwords require at least 12 characters with uppercase, lowercase and a number. Supabase verifies the access/refresh token pair, updates the user through the user-scoped client and revokes existing sessions globally.
+- Reset requests return the same accepted response for unknown accounts, throttled requests and email-delivery failures. Delivery failures are logged without disclosing account existence to the caller.
+- Database-backed limits allow three requests per normalized email and ten per IP fingerprint per 15 minutes. Raw email and IP values are not stored in the limiter.
+- `npm run test:auth:db`: verifies concurrent limits, identifier isolation, window reset and direct-access denial.
+- `npm run test:auth:integration`: creates and removes a disposable Supabase user, consumes a real recovery link through the local API, proves the old password fails, the new password succeeds and the old refresh token is invalidated. It does not send email.
+- `npm run test:browser`: includes valid, mismatched and expired recovery callbacks plus the email-only request flow on desktop and mobile Edge.
+- `npm run db:auth`: applies the additive recovery-rate-limit migration. Production deployment should use the normal Supabase migration process.
+- Still required for launch: confirm the deployed `APP_URL` is in Supabase's redirect allowlist and perform one real branded recovery delivery on the production sending domain.
+
+### Customer list implementation and evidence
+
+- Migration: `supabase/migrations/202609190003_batch_results.sql` adds tenant-scoped, indexed result rows with cascade deletion when the parent list reaches retention expiry.
+- `GET /api/v1/batches/:id/results` enforces workspace membership, validates filters, and returns bounded pages of real result rows. The export endpoint remains workspace-scoped and is the path for provider archives that are too large for inline detail results.
+- The authenticated UI opens the selected batch, renders its real summary, filters by state, searches email results, paginates, downloads the selected batch export, and exposes status/retention/approval settings. Preview fixtures are only used when there is no authenticated session.
+- `npm run test:batches:db` verifies authenticated tenant isolation, read-only grants, and duplicate-row protection. `npm run test:browser` covers the selected-batch results workflow through filtering, search, and pagination.
+- Still required for launch: test CSV/TXT/XLSX parsing at the upload boundary, verify ingestion when the provider supplies only a large archive download, and add provider failure/retry integration coverage.
+
+### Portfolio evidence to maintain
+
+- A README that distinguishes local preview, authenticated functionality and unfinished work.
+- An architecture explanation covering tenancy, secret boundaries, credit transactions, provider failures and billing idempotency.
+- Executable tests, with their scope documented and credentials excluded from Git.
+- Small reviewable changes explaining the problem, implementation choices and verification.
+- A deployment/runbook showing how to configure, release, observe and recover the service.
+
+Do not claim production readiness until the remaining launch criteria are evidenced. Prioritize completing and testing existing customer journeys before adding more surface area.
+
+## Original product and architecture plan
 
 ## Product decisions
 
@@ -9,7 +105,7 @@ This guide turns the current UX shell into a production-ready email verification
 - Allocate 2,500,000 credits for customer sales and hold 288,318 credits as the provider reserve.
 - Use the same package sizes shown in the reference product: 5K, 10K, 25K, 50K, 100K, 250K, 500K, and 1M credits.
 - Set retail prices in Stripe. Keep Stripe Price IDs in our server-side package catalog and read the amount from Stripe when creating the purchase record. Do not calculate prices from the upstream provider or trust an amount sent by the browser.
-- Add subscriptions only after pay-as-you-go checkout, credits, refunds, and reconciliation are proven.
+- Offer one-time and monthly packages. Implement one-time checkout first, then enable the prepared monthly catalog after renewal and expiration tests pass.
 - Use Stripe Checkout for payment collection and Stripe Customer Portal for billing management.
 - Use Resend for transactional and internal admin email.
 - Use Supabase for authentication and PostgreSQL. Keep the existing Express server as the only service allowed to call Stripe, Resend, the database, and the verification provider.
@@ -21,16 +117,26 @@ These package quantities match the supplied screenshots and the current public E
 
 | Package ID | Credits | PAYG price | Subscription price | Status |
 | --- | ---: | ---: | ---: | --- |
-| `credits_5k` | 5,000 | Configure | Later | MVP |
-| `credits_10k` | 10,000 | Configure | Later | MVP |
-| `credits_25k` | 25,000 | $141 reference | Later | MVP |
-| `credits_50k` | 50,000 | Configure | Later | MVP |
-| `credits_100k` | 100,000 | Configure | Later | MVP |
-| `credits_250k` | 250,000 | Configure | Later | MVP |
-| `credits_500k` | 500,000 | Configure | Later | MVP |
-| `credits_1m` | 1,000,000 | Configure | Later | MVP |
+| `credits_5k` | 5,000 | $14 | Later | MVP |
+| `credits_10k` | 10,000 | $24 | Later | MVP |
+| `credits_25k` | 25,000 | $44 | Later | MVP |
+| `credits_50k` | 50,000 | $74 | Later | MVP |
+| `credits_100k` | 100,000 | $134 | Later | MVP |
+| `credits_250k` | 250,000 | $239 | Later | MVP |
+| `credits_500k` | 500,000 | $294 | Later | MVP |
+| `credits_1m` | 1,000,000 | $444 | Later | MVP |
 
-The `$141` value is taken from the supplied 25K screenshot and is only a reference. EmailVerify will be priced slightly below the reference product, with final prices managed in Stripe. Before launch, confirm every sell price and decide the free signup allowance. Keep `retail_price_cents`, `provider_cost_cents`, and `stripe_price_id` separate for reporting even though Stripe is the authority for the charged amount.
+Monthly subscription catalog:
+
+| Package ID | Credits per month | Monthly price | Rollover |
+| --- | ---: | ---: | --- |
+| `monthly_2k` | 2,000 | $5 | No |
+| `monthly_10k` | 10,000 | $20 | No |
+| `monthly_50k` | 50,000 | $99 | No |
+| `monthly_250k` | 250,000 | $399 | No |
+| `monthly_500k` | 500,000 | $599 | No |
+
+These prices come from `my-email-verification-pricing.csv`. Stripe remains the authority for the charged amount, so the database catalog stores the expected price for display and reconciliation alongside each Stripe Price ID. Keep `retail_price_cents`, `provider_cost_cents`, and `stripe_price_id` separate for reporting.
 
 The initial provider credits were prepaid through AppSumo, so the useful first metric is cash recovered per provider credit sold. Still reserve for Stripe fees, refunds, support, infrastructure, free credits, and unbillable results. Approve a floor price for every package even when Stripe contains the editable retail price.
 
@@ -41,7 +147,7 @@ Suggested server-side record:
   id: 'credits_25k',
   name: '25,000 credits',
   credits: 25000,
-  retailPriceCents: null, // synchronized from Stripe for reporting
+  retailPriceCents: 4400,
   providerCostCents: null,
   stripePriceId: 'price_...',
   active: true
@@ -75,7 +181,9 @@ Use an append-only credit ledger as the source of truth. A cached balance may be
 | `credit_accounts` | Fast current balance | `workspace_id`, `available`, `reserved` |
 | `credit_ledger` | Auditable credit history | `id`, `workspace_id`, `type`, `amount`, `reference_type`, `reference_id`, `created_at` |
 | `provider_inventory` | Tracks the prepaid provider pool | `provider`, `starting_credits`, `sales_allocation`, `reported_available`, `allocated_to_customers`, `safety_reserve`, `synced_at` |
-| `packages` | Server-controlled catalog | `id`, `credits`, `retail_price_cents`, `stripe_price_id`, `active` |
+| `packages` | Server-controlled catalog | `id`, `credits`, `retail_price_cents`, `billing_type`, `stripe_price_id`, `active` |
+| `subscriptions` | Monthly Stripe state | `workspace_id`, `package_id`, `stripe_subscription_id`, `status`, `current_period_end` |
+| `credit_grants` | Expiring and permanent credit buckets | `workspace_id`, `source_id`, `credits_remaining`, `expires_at` |
 | `purchases` | Stripe checkout state | `id`, `workspace_id`, `package_id`, `stripe_session_id`, `amount_cents`, `status` |
 | `webhook_events` | Webhook idempotency | `provider`, `event_id`, `processed_at`, `status` |
 | `verification_requests` | Single/API requests | `id`, `workspace_id`, `email_hash`, `state`, `credits_used`, `provider_request_id` |
@@ -120,6 +228,8 @@ Recommended launch controls:
 6. Send admin alerts at 25%, 10%, and 5% of the 2.5M sales allocation remaining.
 7. Show total provider balance, sales allocation, allocated customer balances, consumed provider credits, reserve, and remaining sellable credits in admin.
 8. When the sales allocation approaches zero, pause checkout. Releasing any part of the 288,318-credit reserve requires an explicit admin adjustment with a recorded reason.
+
+Monthly plans create a fresh liability on every successful renewal. Before accepting or renewing a subscription, include the upcoming monthly grant in the inventory check. Pause new subscriptions when the remaining sales allocation cannot cover both existing customer balances and the next cycle of active monthly grants.
 
 The initial maximum sellable pool is exactly 2,500,000 credits before accounting for free signup credits or credits already consumed. Free signup credits must come out of this allocation so customer liabilities never exceed the approved pool.
 
@@ -220,12 +330,14 @@ Exit criteria: admins can resolve common account issues without database access,
 
 ### Phase 6: subscriptions after PAYG is stable
 
-1. Add recurring Stripe Prices to the same package catalog.
-2. Support monthly first; add quarterly/yearly only when needed.
+1. Add recurring Stripe Prices for the five approved monthly packages.
+2. Support monthly only.
 3. Grant the cycle's credits on `invoice.paid`, not when a subscription object is created.
 4. Handle `invoice.payment_failed`, `customer.subscription.updated`, and `customer.subscription.deleted`.
-5. Let unused credits roll over only if that is the approved product policy.
+5. Expire unused monthly credits at the end of each billing cycle with no rollover. One-time credits never expire.
 6. Use Stripe Customer Portal for cancellation and payment method changes.
+
+Consume credits from the grant with the nearest expiration first, then consume permanent one-time credits. This prevents customers from losing monthly credits while permanent credits are available.
 
 Exit criteria: renewals grant once, failed renewals grant none, and cancellation does not remove previously purchased credits.
 
@@ -313,6 +425,29 @@ Only `VITE_` variables are exposed to browser code. No secret in this list shoul
 11. Subscription billing.
 
 This order gets a sellable PAYG product online without making subscriptions, team management, or advanced automation prerequisites for launch.
+
+## Historical implementation notes (not launch sign-off)
+
+- Complete in code: Supabase credential validation, signup, login, refresh, password reset, workspace bootstrap, tenant middleware, profile loading, sign-out, customer balance, and ledger reads.
+- Complete in code: package catalog, inventory reservations, Stripe Checkout creation, raw-body signature verification, idempotent one-time fulfillment, permanent credit grants, Customer Portal sessions, and Resend purchase/admin messages.
+- Prepared but intentionally disabled: monthly Checkout. It must not charge until invoice renewal, credit expiration, cancellation, and insufficient-inventory behavior are fully implemented and tested.
+- Activated: `supabase/migrations/202609170001_foundation.sql` is applied through the Supabase Session Pooler connection.
+
+Live status as of September 17, 2026:
+
+- The foundation migration is applied to Supabase and all schema, function, seed, and RLS checks pass.
+- All 13 live Stripe products and USD prices are created and mapped to `packages.stripe_price_id`.
+- Stripe reconciliation confirms 13 of 13 amount, billing mode, metadata, currency, product status, and price status checks pass.
+- Monthly prices exist in Stripe, but monthly Checkout remains application-disabled until renewal and expiration webhook handling is complete.
+- Signup workspace bootstrap and its one-time 1,000-credit grant pass live integration tests. The grant is recorded in both the credit ledger and inventory allocation.
+- New signup grants are restricted to one claim per user, exact IP, and network block using irreversible HMAC fingerprints.
+- Single verification now reserves a customer credit transactionally, persists a privacy-reduced result, consumes billable results, and refunds unknown or failed results. Repeated requests can use an idempotency key to prevent duplicate charges.
+- Bulk CSV/TXT uploads now extract and deduplicate up to 250,000 addresses. Lists are risk-scored before processing, lists over the provider's 50,000-address boundary are safely chunked, and flagged jobs wait in an audited admin approval queue before credits are reserved.
+- Completed lists are retained for 187 days. On day 180, the owner receives a branded export warning with the admin address blind-copied; a scheduled retention job removes expired database records and private export archives. Large-list ZIP exports are copied from the provider into private Supabase Storage before temporary provider URLs expire.
+- Signup confirmation and password recovery use Supabase-generated secure links delivered through the shared branded Resend template. The production sending domain and `EMAIL_LOGO_URL` must be publicly verified before launch.
+- Customer API keys are live: secrets are displayed once, stored only as keyed hashes, revocable by workspace owners/admins, limited to 60 requests per minute per key, and metered through the same transactional credit settlement used by the dashboard. The API screen now reports real 30-day API usage.
+- The admin control center is live with provider inventory visibility, system counts, searchable workspaces, members, purchase and ledger history, audited inventory-aware credit adjustments, workspace suspension/reactivation, and the batch approval queue. Sensitive changes require a written reason and are recorded in `admin_actions`.
+- In-app support is live with categorized customer requests, branded Resend acknowledgement and admin-alert emails, a five-active-ticket workspace limit, customer request history, and an admin inbox for priority and status management. Admin changes are recorded in the shared operations audit trail.
 
 ## Reference documentation
 
