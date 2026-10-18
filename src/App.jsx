@@ -5,9 +5,11 @@ import {
   Sparkles, Upload, User, Users, XCircle, Zap,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { getUploadAttempt, finishUploadAttempt } from './lib/uploadAttempt.js'
 import { apiRequest, readAuthCallback, readStoredSession, refreshSession, requestPasswordReset, signIn, signUp, storeSession, updatePassword, updateProfile } from './lib/api.js'
 
 import { InvitationPage, TeamPage } from './components/TeamPage.jsx'
+import { BillingPage as LiveBillingPage } from './components/BillingPage.jsx'
 const colors = { valid: '#38c994', risky: '#ffc84d', invalid: '#ff6b86', unknown: '#55a9e9', duplicate: '#7558ff' }
 
 const oneTimePricing = [
@@ -65,7 +67,7 @@ export default function App() {
   const [invitationToken, setInvitationToken] = useState(() => new URLSearchParams(window.location.search).get('invitation'))
   const [account, setAccount] = useState(null)
   const [creditBalance, setCreditBalance] = useState(null)
-  const [page, setPage] = useState(() => authCallback.error || session?.auth_event === 'recovery' ? 'password-update' : invitationToken ? 'invitation' : session && ['#admin-approvals', '#support'].includes(window.location.hash) ? window.location.hash.slice(1) : session ? 'bulk' : 'landing')
+  const [page, setPage] = useState(() => authCallback.error || session?.auth_event === 'recovery' ? 'password-update' : invitationToken ? 'invitation' : session && ['#admin-approvals', '#support', '#billing'].includes(window.location.hash) ? window.location.hash.slice(1) : session ? 'bulk' : 'landing')
   const [detailTab, setDetailTab] = useState('overview')
   const [selectedBatch, setSelectedBatch] = useState(null)
   const [mobileNav, setMobileNav] = useState(false)
@@ -144,12 +146,12 @@ export default function App() {
         {page === 'account' && <AccountSidebar active="account" navigate={navigate} />}
         {page === 'billing' && <AccountSidebar active="billing" navigate={navigate} />}
         <main className="min-w-0 flex-1">
-          {page === 'bulk' && <BulkListsPage session={session} onOpen={openList} />}
+          {page === 'bulk' && <BulkListsPage session={session} workspaceId={account?.workspace?.id} onOpen={openList} />}
           {page === 'list' && <ListDetailPage session={session} batch={selectedBatch} tab={detailTab} setTab={setDetailTab} />}
           {page === 'single' && <SinglePage session={session} onCreditUsed={(used) => setCreditBalance((balance) => balance == null ? balance : Math.max(0, balance - used))} />}
           {page === 'api' && <ApiPage session={session} />}
           {page === 'credits' && <BuyCreditsPage session={session} navigate={navigate} />}
-          {page === 'billing' && <BillingPage navigate={navigate} balance={creditBalance} />}
+          {page === 'billing' && <LiveBillingPage navigate={navigate} session={session} />}
           {page === 'profile' && <ProfilePage account={account} session={session} navigate={navigate} onUpdated={setAccount} onSignOut={signOut} />}
           {page === 'account' && <TeamPage session={session} account={account} navigate={navigate} />}
           {page === 'support' && <SupportPage session={session} />}
@@ -514,7 +516,7 @@ function AdminActivityRows({ items, empty = '', render }) {
   return <div>{items.map((item) => <div key={item.id} className="flex items-center justify-between gap-4 border-t border-[#eceaf5] px-5 py-3 text-xs first:border-t-0">{render(item)}</div>)}</div>
 }
 
-function BulkListsPage({ session, onOpen }) {
+function BulkListsPage({ session, workspaceId, onOpen }) {
   const [view, setView] = useState('grid')
   const [items, setItems] = useState(session ? [] : lists)
   const [uploading, setUploading] = useState(false)
@@ -557,8 +559,13 @@ function BulkListsPage({ session, onOpen }) {
       }
       const body = new FormData()
       body.append('file', file)
-      const batch = await apiRequest('/batches/upload', { session, method: 'POST', body })
-      setItems((current) => [normalizeBatch(batch), ...current])
+      const bytes = await new Blob([file.name, '\0', file]).arrayBuffer()
+      const digest = await crypto.subtle.digest('SHA-256', bytes)
+      const fingerprint = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+      const attempt = getUploadAttempt(workspaceId, fingerprint)
+      const batch = await apiRequest('/batches/upload', { session, method: 'POST', headers: { 'Idempotency-Key': attempt.key }, body })
+      finishUploadAttempt(attempt)
+      setItems((current) => [normalizeBatch(batch), ...current.filter((item) => item.id !== batch.id)])
       const summary = ` ${batch.duplicates_removed || 0} duplicates removed; ${batch.ignored_cells || 0} malformed email cells skipped.`
       setNotice(batch.approval_required
         ? `Your ${batch.total.toLocaleString()}-address batch is staged for manual review. No credits have been reserved yet.${summary}`
@@ -810,6 +817,7 @@ function BuyCreditsPage({ session, navigate }) {
       const result = await apiRequest('/billing/checkout-sessions', {
         session,
         method: 'POST',
+        headers: { 'Idempotency-Key': crypto.randomUUID() },
         body: JSON.stringify({ packageId: selectedPackage.id }),
       })
       window.location.assign(result.checkoutUrl)
@@ -825,14 +833,6 @@ function AccountSidebar({ active, navigate }) {
   return <aside className="hidden w-[170px] shrink-0 md:block"><SideLink active={active === 'profile'} icon={User} onClick={() => navigate('profile')}>Profile</SideLink><SideLink active={active === 'account'} icon={Users} onClick={() => navigate('account')}>Account</SideLink><SideLink icon={Grid2X2}>Integrations</SideLink><SideLink active={active === 'billing'} icon={CreditCard} onClick={() => navigate('billing')}>Billing</SideLink><SideLink icon={Code2} onClick={() => navigate('api')}>Developer</SideLink></aside>
 }
 
-function BillingPage({ navigate, balance }) {
-  return <div className="space-y-4"><Panel className="grid grid-cols-3 divide-x divide-[#e5e3f0]"><SummaryBox label="CREDIT BALANCE" value={balance == null ? 'Loading...' : Number(balance).toLocaleString()} /><SummaryBox label="CREDITS LAST ADDED" value="-" /><SummaryBox label="TIME UNTIL DEPLETION" value="-" /></Panel><Panel><PanelHeader title="Credit Usage" action={<div className="flex gap-2"><Select value="All" /><Select value="Monthly" /></div>} /><div className="grid grid-cols-2 divide-x divide-[#e5e3f0] border-b border-[#e5e3f0] md:grid-cols-4"><Metric label="BULK" value="274K" dot="#7558ff" /><Metric label="SINGLE" value="7" dot="#d86bff" /><Metric label="API" value="23.8K" dot="#38227c" /><Metric label="OTHER" value="0" dot="#a9a4cd" /></div><CreditChart /></Panel><Panel><PanelHeader title="Auto-Refill" action={<Tag>INACTIVE</Tag>} /><div className="grid gap-4 p-5 sm:grid-cols-2"><Field label="When balance drops below" value="500" /><Field label="Automatically purchase" value="10,000" /></div><div className="flex justify-between border-t border-[#e5e3f0] p-5"><Button variant="outline" onClick={() => navigate('credits')}>ADD PAYMENT METHOD</Button><Button>ENABLE AUTO-REFILL</Button></div></Panel></div>
-}
-
-function CreditChart() {
-  const bars = [22, 7, 92, 27, 38, 47, 10, 21, 40]
-  return <div className="flex h-72 items-end gap-3 px-8 pb-8 pt-6">{bars.map((height, i) => <div key={i} className="flex h-full flex-1 flex-col justify-end"><div className="rounded-t bg-[#7558ff]" style={{ height: `${height * 2}px` }} /><span className="mt-2 text-center text-xs text-[#938caf]">{i === 0 ? '2026' : ['Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep'][i - 1]}</span></div>)}</div>
-}
 
 function ProfilePage({ account, session, navigate, onUpdated, onSignOut }) {
   const profile = account?.user

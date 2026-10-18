@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: emailverify
+    runtime: docker
+    plan: 0.5c-512mb
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: "10000"
+      - key: TRUST_PROXY_HOPS
+        value: "1"
+      - key: STRIPE_LIVE_ENABLED
+        value: "false"
+      - key: SIGNUP_FINGERPRINT_SECRET
+        generateValue: true
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: EMAILABLE_API_KEY
+        sync: false
+      - key: STRIPE_TEST_SECRET_KEY
+        sync: false
+      - key: STRIPE_TEST_WEBHOOK_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false

@@ -30,8 +30,7 @@ export function hashPrivateIdentifier(namespace, value) {
 }
 
 export function getSignupFingerprint(request) {
-  const forwarded = request.get('cf-connecting-ip') || request.get('x-forwarded-for')?.split(',')[0]
-  const ip = normalizeIp(forwarded) || normalizeIp(request.socket.remoteAddress)
+  const ip = normalizeIp(request.ip) || normalizeIp(request.socket.remoteAddress)
   if (!ip) return { ipHash: null, networkHash: null }
 
   return {

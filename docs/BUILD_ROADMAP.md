@@ -2,6 +2,46 @@
 
 ## Delivery rule
 
+### Render release preparation (October 18)
+
+Added a single-service Express runtime serving the built React frontend, JSON API fallbacks, private-file/asset handling, container health checks, a non-root Docker image, Render Blueprint, production environment validation and graceful shutdown. The app derives its initial public origin from Render's `RENDER_EXTERNAL_URL`. Signup IP fingerprinting uses the configured trusted proxy boundary. Checkout returns to the Billing route on reload.
+
+Local verification passed: frontend build; three deployment tests covering serving, headers, API errors, private files, proxy identity and production configuration; upload parser/permission tests; upload retry-storage tests; existing Stripe unit tests. GitHub Actions repeats these checks without private credentials. Docker image build, Render deployment and hosted acceptance are not yet verified. Render account connection is required to provision and inspect the service. See `RENDER_DEPLOYMENT.md`.
+
+### Live billing reporting (September 22)
+
+The billing page now reads a service-only, workspace-scoped database summary instead of demo metrics. It reports available/reserved credits, the latest credit addition, settled consumption by channel, UTC daily/monthly buckets, and the latest 20 purchases. Filters, refresh, loading, empty and failure states are wired. The existing Stripe portal endpoint is connected for linked customers; failures remain on the billing page without clearing the session. Nonfunctional auto-refill controls and the unsupported depletion estimate were removed.
+
+Billing HTTP routes require an active workspace and owner/admin role. Purchase/subscription RLS now applies the same role restriction. The summary RPC is executable only by service_role. Apply with `npm run db:billing`; applied to the configured database on September 22.
+
+Evidence: `npm run test:billing` checks real Supabase authentication, owner/admin/member and removed-member access, database tenant isolation, 1,005 consumption entries without truncation, reserved/released exclusion, channel attribution, recent purchase limit, and direct authenticated purchase RLS. Browser tests in `tests/browser/billing.spec.js` check mocked data, filters, empty/error states, portal failure and mobile/desktop layouts. `npm run build` passes.
+
+Still unfinished: Stripe test-mode Checkout/webhook/refund/portal round-trip with a real customer account, historical guest-purchase reconciliation, monthly renewals/expiration/cancellation, and automatic refill. This reporting work does not certify the complete payment lifecycle for launch. Purchase history shows credit quantities/status, not amounts, until persisted currency and Stripe price reconciliation are verified. API usage attribution uses retained verification records and API key IDs; keys must remain soft-revoked rather than hard-deleted to preserve historical attribution.
+
+### Stripe checkout hardening (September 22)
+
+The one-time checkout path now creates/reuses a workspace Stripe Customer with an idempotency key, validates the Stripe Price against the internal package before reserving inventory, requires a UUID `Idempotency-Key`, persists checkout identity, and can resume a pending Checkout Session after a lost browser redirect. Expired pending reservations are released before a new checkout. Webhooks retrieve the authoritative Checkout Session, require matching test/live mode, require `payment_status=paid`, validate purchase/customer/package/amount/currency/session metadata in a service-only SQL function, and remain replay-safe through Stripe event IDs. Refunds and disputes record risk and suspend the workspace for reconciliation.
+
+The current `.env` still has a `pk_test_...` publishable key in `STRIPE_TEST_SECRET_KEY`. Replace it with the matching server secret `sk_test_...` or restricted `rk_test_...`; the app intentionally refuses the publishable key. Do not place either key in `VITE_` variables or commit `.env`.
+
+### Upload retry persistence (September 22 follow-up)
+
+Pending multipart upload keys now survive page reloads and navigation within the same browser tab using session storage. Keys are scoped by workspace and a SHA-256 fingerprint of filename/content; raw filenames, email lists and file bytes are not stored. Successful responses clear only the matching pending key. Storage failure stops submission with a visible error. This supersedes the earlier navigation limitation below.
+
+Verification: `node --test tests/uploadAttempt.test.js` checks workspace separation, stale-response cleanup, and storage failure. Desktop/mobile upload browser tests simulate a failed response, reload, retry with the same key, then an intentional fresh import with a new key. API/database enforcement remains the previously tested workspace/request-key unique index; no schema change is needed for this follow-up.
+
+Limit: session storage does not guarantee recovery after closing the tab, clearing site data, switching origins or changing browsers. Provider processing/recovery, large archive ingestion and distributed import limits remain outstanding.
+
+### Authenticated import acceptance (September 22)
+
+Implemented and verified: multipart imports use a required `Idempotency-Key`, with a database unique index per workspace and a normalized-content hash. Replays return the existing batch; changed content with the same key returns 409. The browser keeps the same key when retrying an unsuccessful upload in the mounted list view. Successful uploads clear the key so another intentional import is possible. Refreshing/navigating away does not preserve the browser retry key.
+
+`npm run test:upload:integration` creates temporary verified Supabase users and workspaces, runs the real HTTP authentication/parser/storage path, checks normalized private files, sequential and concurrent deduplication, changed-content rejection, invalid-file rejection, foreign workspace isolation, removed-member rejection, and no credit reservation while awaiting approval. Temporary database/auth/storage fixtures are removed. Approval notification delivery is stubbed in this test, and no verification provider calls are made.
+
+Migration: `202609220001_batch_import_idempotency.sql`, applied with `npm run db:import-idempotency`. Browser upload tests additionally check request headers and key reuse after interrupted requests. Playwright now uses a dedicated port (5193, configurable with `PLAYWRIGHT_PORT`) rather than reusing another running application.
+
+Still unfinished: approval-to-provider processing/settlement recovery, durable notification retries, large archive ingestion, distributed import rate limits, and retry-key persistence across navigation. JSON `/batches` submissions still require a separate idempotency contract. These limits supersede the earlier broad completion claims below.
+
 ### Server file import (September 19)
 
 Implemented: authenticated multipart `POST /api/v1/batches/upload`, CSV/TXT/XLSX parsing, normalization and duplicate removal, 10 MB file limit, 250,000 unique-address limit, private normalized submission storage through the existing batch workflow. One email per cell or TXT line is accepted; malformed email cells are counted and reported. No new database schema is required.

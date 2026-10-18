@@ -1,0 +1,11 @@
+**/node_modules
+dist
+.git
+.env
+.env.*
+.tools
+tailwinds_bb
+tailwinds_bb.zip
+test-results
+playwright-report
+*.log

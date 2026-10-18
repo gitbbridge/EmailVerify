@@ -42,6 +42,8 @@ npm run dev
 
 Add the private test provider key to `.env` as `EMAILABLE_API_KEY_TEST_KEY`. Production can use `EMAILABLE_API_KEY`. Never expose either key through a `VITE_` environment variable or commit `.env`.
 
+Stripe local/test setup requires `STRIPE_TEST_SECRET_KEY` (`sk_test_...`, or a restricted `rk_test_...`) and the matching `STRIPE_TEST_WEBHOOK_SECRET` (`whsec_...`). A `pk_test_...` publishable key is not valid for server-side Checkout. The test pair takes precedence over live values. Live Checkout remains blocked until `APP_URL` is HTTPS and `STRIPE_LIVE_ENABLED=true`.
+
 Apply the Supabase migrations using the database connection string from the Supabase dashboard. On networks without IPv6, use the Session Pooler connection string for `DATABASE_URL`.
 
 ```bash
@@ -53,6 +55,8 @@ npx supabase db push --db-url "$DATABASE_URL" --include-all
 - Health check: `GET /api/health`
 
 ## Production roadmap
+
+Render deployment is defined in `render.yaml` with a Docker web service for both the frontend and API. See [the Render deployment guide](docs/RENDER_DEPLOYMENT.md) for secrets, authentication redirects, webhook setup, release checks and known limits. `npm run test:deployment` verifies the compiled frontend, API boundaries, private-file denial, production configuration and proxy-aware signup identity.
 
 See [`docs/BUILD_ROADMAP.md`](docs/BUILD_ROADMAP.md) for the staged build guide covering authentication, credit accounting, Stripe billing, Resend email, live verification, and the minimal admin console.
 
@@ -112,6 +116,8 @@ Database tests require `DATABASE_URL`. The recovery integration test creates and
 The local `tailwinds_bb` reference folder and archive are intentionally excluded from Git because they are not runtime dependencies and add roughly 650 MB to the repository.
 
 ## Verification
+
+Multipart uploads require an `Idempotency-Key` header (8-128 letters, digits, hyphens or underscores). Reusing the same key and normalized list returns the existing batch; different content returns 409. Apply `npm run db:import-idempotency` before running the updated API. `npm run test:upload:integration` uses temporary real Supabase accounts, database records and private storage, cleans them up, and stubs approval email delivery. It does not spend provider credits. Playwright starts its own server on port 5193 (`PLAYWRIGHT_PORT` overrides it).
 
 CSV, TXT and XLSX uploads now use authenticated multipart `POST /api/v1/batches/upload` (field `file`). Files are limited to 10 MB and 250,000 unique addresses, with one email per cell or TXT line. The existing private submission bucket and batch approval flow persist the normalized addresses. Run `npm run test:upload` for parser and anonymous-access tests, and `npx playwright test tests/browser/upload.spec.js` for UI tests. Full authenticated storage/provider lifecycle coverage remains outstanding; see the newest roadmap entry.
 

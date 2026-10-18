@@ -11,12 +11,9 @@ async function fulfillOneTimePurchase(event, session) {
   const purchaseId = session.metadata?.purchase_id
   if (!purchaseId) throw new Error('Stripe session is missing purchase metadata.')
 
-  const { data, error } = await admin.rpc('fulfill_one_time_purchase', {
+  const { data, error } = await admin.rpc('fulfill_checkout_purchase', {
     p_event_id: event.id,
-    p_purchase_id: purchaseId,
-    p_stripe_customer_id: String(session.customer || ''),
-    p_stripe_payment_intent_id: String(session.payment_intent || ''),
-    p_amount_cents: session.amount_total || 0,
+    p_session: session,
   })
   if (error) throw error
   if (!data?.processed) return
@@ -50,9 +47,17 @@ async function recordPaymentRisk(event) {
     event_type: event.type,
   }, { onConflict: 'stripe_event_id', ignoreDuplicates: true })
   if (error) throw error
-  if (purchaseId) {
-    const status = event.type === 'charge.refunded' ? 'refunded' : 'failed'
-    await admin.from('purchases').update({ status, updated_at: new Date().toISOString() }).eq('id', purchaseId)
+  if (['charge.refunded', 'charge.dispute.created'].includes(event.type)) {
+    // Keep the settled purchase immutable; freeze further spending for manual financial reconciliation.
+    const { error: freezeError } = await admin.from('workspaces').update({ status: 'suspended' }).eq('id', workspaceId)
+    if (freezeError) throw freezeError
+  }
+  if (purchaseId && event.type === 'charge.refunded') {
+    const { error: purchaseError } = await admin.from('purchases')
+      .update({ status: 'refunded', updated_at: new Date().toISOString() })
+      .eq('id', purchaseId)
+      .in('status', ['paid', 'pending'])
+    if (purchaseError) throw purchaseError
   }
 }
 
@@ -69,14 +74,17 @@ router.post('/', async (request, response) => {
   }
 
   try {
-    if (event.type === 'checkout.session.completed' && event.data.object.mode === 'payment') {
-      await fulfillOneTimePurchase(event, event.data.object)
+    if (event.livemode !== config.stripeSecretKey.includes('_live_')) throw new Error('Stripe event mode mismatch.')
+    if (['checkout.session.completed', 'checkout.session.async_payment_succeeded'].includes(event.type)) {
+      const session = await getStripe().checkout.sessions.retrieve(event.data.object.id)
+      if (session.mode === 'payment' && session.payment_status === 'paid') await fulfillOneTimePurchase(event, session)
     }
 
     if (event.type === 'checkout.session.expired') {
-      await getSupabaseAdmin().rpc('release_checkout_reservation', {
+      const { error } = await getSupabaseAdmin().rpc('release_checkout_reservation', {
         p_purchase_id: event.data.object.metadata?.purchase_id,
       })
+      if (error) throw error
     }
 
     if (['checkout.session.async_payment_failed', 'charge.refunded', 'charge.dispute.created', 'invoice.payment_failed'].includes(event.type)) {

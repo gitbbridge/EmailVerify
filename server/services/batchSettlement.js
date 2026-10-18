@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import { getSupabaseAdmin } from './supabase.js'
 import { createBatch, getBatch } from './verificationProvider.js'
 import { assessBatchRisk } from './batchRisk.js'
@@ -81,9 +81,20 @@ async function beginBatchProcessing(batch, emails) {
   }
 }
 
-export async function startBatch({ workspaceId, userId, networkHash, name, emails }) {
+export async function startBatch({ workspaceId, userId, networkHash, name, emails, requestKey = null }, { notifyApproval = sendBatchApprovalRequest } = {}) {
   const admin = getSupabaseAdmin()
   const uniqueEmails = [...new Set(emails.map((email) => email.trim().toLowerCase()))]
+  const requestHash = createHash('sha256').update(JSON.stringify({ name, emails: uniqueEmails })).digest('hex')
+  const replay = async () => {
+    if (!requestKey) return null
+    const { data, error } = await admin.from('batches').select('*').eq('workspace_id', workspaceId).eq('request_key', requestKey).maybeSingle()
+    if (error) throw error
+    if (!data) return null
+    if (data.request_hash !== requestHash) throw Object.assign(new Error('This upload key was already used for a different list.'), { status: 409, code: 'idempotency_conflict' })
+    return { ...publicBatch(data), approval_required: data.status === 'approval_pending', replayed: true }
+  }
+  const existing = await replay()
+  if (existing) return existing
   const batchId = randomUUID()
   const submissionPath = `${workspaceId}/${batchId}.json`
   const risk = await assessBatchRisk({ workspaceId, networkHash, total: uniqueEmails.length })
@@ -93,15 +104,20 @@ export async function startBatch({ workspaceId, userId, networkHash, name, email
     id: batchId, workspace_id: workspaceId, user_id: userId, name, total: uniqueEmails.length,
     status: risk.requiresApproval ? 'approval_pending' : 'reserved', risk_rules: risk.rules,
     network_hash: networkHash, submission_path: submissionPath,
+    request_key: requestKey, request_hash: requestKey ? requestHash : null,
     approval_requested_at: risk.requiresApproval ? new Date().toISOString() : null,
   }).select().single()
   if (insertError) {
     await admin.storage.from('batch-submissions').remove([submissionPath])
+    if (insertError.code === '23505' && requestKey) {
+      const winner = await replay()
+      if (winner) return winner
+    }
     throw insertError
   }
   if (risk.requiresApproval) {
     await admin.from('batch_approval_audit').insert({ batch_id: batchId, decision: 'requested', rule_codes: risk.rules, actor_user_id: userId })
-    await sendBatchApprovalRequest({ batchId, batchName: name, total: uniqueEmails.length, rules: risk.rules }).catch(() => {})
+    await notifyApproval({ batchId, batchName: name, total: uniqueEmails.length, rules: risk.rules }).catch(() => {})
     return { ...publicBatch(batch), duplicates_removed: emails.length - uniqueEmails.length, approval_required: true }
   }
   return { ...(await beginBatchProcessing(batch, uniqueEmails)), duplicates_removed: emails.length - uniqueEmails.length, approval_required: false }
